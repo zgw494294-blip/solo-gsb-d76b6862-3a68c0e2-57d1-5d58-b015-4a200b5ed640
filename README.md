@@ -1,0 +1,117 @@
+# 本地赛道计次裁决台
+
+一个完全本地运行的赛道计次（lap counting）裁决工具：录入 1～3 名选手、两段合格耗时区间与至多 40 条感应记录，自动为每名选手选出最优的完整计次方案。
+
+- 后端：Python + FastAPI（`app/`）
+- 前端：原生 HTML / CSS / JavaScript，无构建步骤（`static/`）
+- 裁决算法：枚举合法趟 + DAG 动态规划（`bisect` 二分前驱），含 400 组随机数据对拍测试
+
+## 裁决规则
+
+每趟从同一选手的感应记录中依次选取 **起点 S → 中途门 M → 终点 F** 各一条：
+
+1. 两段耗时（M−S、F−M）都必须落在录入的**正整数闭区间**内；
+2. 同一选手的不同趟**不得共用任何记录**；
+3. 后一趟的起点秒数必须**严格晚于**前一趟的终点秒数（`后起点 > 前终点`）；
+4. 其余读数一律舍弃，列入“未采纳记录”。
+
+记录可以乱序录入，同一秒允许存在多条记录。
+
+每名选手按以下优先级选择方案：
+
+1. **完整计次数最多**；
+2. 计次数相同时，**各趟用时之和最短**（每趟用时 = 终点秒数 − 起点秒数）；
+3. 仍相同时，取按计次时间顺序串接的记录 ID 序列**字典序最小**者。
+
+没有任何完整一趟时显示 **0 次**；输入非法时只报错、**不展示任何部分结果**。修改任意输入后点击“裁决 / 重新计算”，所有选手一起重算（页面也会提示旧结果已过期）。
+
+## 一键启动（Docker Compose）
+
+```bash
+docker compose up --build
+```
+
+启动后浏览器访问：
+
+- **http://localhost:8000**
+
+停止：
+
+```bash
+docker compose down
+```
+
+## 仅用 Docker（可选）
+
+```bash
+docker build -t lap-judge .
+docker run --rm -p 8000:8000 lap-judge
+```
+
+## 本地直接运行（不使用 Docker）
+
+需要 Python 3.10+：
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+uvicorn app.main:app --host 0.0.0.0 --port 8000
+```
+
+访问 **http://localhost:8000** 。
+
+## 页面用法
+
+1. 填写两段合格耗时闭区间（正整数秒）；
+2. 添加 1～3 名选手，编号必须互异；
+3. 录入感应记录：唯一字符串 ID、选手编号、门（S/M/F）、非负整数秒数；全空行会自动忽略，部分填写视为非法；
+4. 点击 **⚖ 裁决 / 重新计算**。结果按选手分卡展示每趟采纳的三条记录与两段/总用时，以及该选手所有未采纳记录。
+5. “填入示例”可快速载入一份包含多趟、乱序、舍弃读数的数据。
+
+## API
+
+`POST /api/adjudicate`
+
+```json
+{
+  "standards": {"smMin": 10, "smMax": 60, "mfMin": 10, "mfMax": 60},
+  "runners": [{"number": 101}, {"number": 102}],
+  "records": [
+    {"id": "a1", "runner": 101, "gate": "S", "time": 0},
+    {"id": "b1", "runner": 101, "gate": "M", "time": 12},
+    {"id": "c1", "runner": 101, "gate": "F", "time": 25}
+  ]
+}
+```
+
+- 合法：`200 {"ok": true, "result": {...}}`
+- 非法输入：`422 {"ok": false, "error": "中文原因"}`（不返回部分结果）
+- 请求体不是 JSON：`400`
+
+## 测试
+
+```bash
+python3 test_adjudication.py
+```
+
+包含闭区间边界、严格时间分离、记录共用、三级决胜规则、各类非法输入校验，以及 400 组随机数据与独立记忆化递归参考实现的对拍。
+
+## 目录结构
+
+```
+.
+├── Dockerfile
+├── docker-compose.yml
+├── requirements.txt
+├── README.md
+├── app/
+│   ├── __init__.py
+│   ├── adjudication.py   # 输入校验 + 裁决 DP
+│   └── main.py           # FastAPI 入口与静态资源
+├── static/
+│   ├── index.html
+│   ├── styles.css
+│   └── app.js
+└── test_adjudication.py
+```
