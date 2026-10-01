@@ -11,9 +11,8 @@ const addRecordBtn = document.getElementById("add-record");
 const recordCount = document.getElementById("record-count");
 const form = document.getElementById("judge-form");
 const errorBox = document.getElementById("error-box");
-const staleHint = document.getElementById("stale-hint");
+const pendingHint = document.getElementById("pending-hint");
 const resultsBox = document.getElementById("results");
-const submitBtn = document.getElementById("submit-btn");
 
 /* ---------- 行管理 ---------- */
 
@@ -71,31 +70,57 @@ function refreshRecordCount() {
   addRecordBtn.disabled = recordRows.children.length >= MAX_RECORDS;
 }
 
-addRunnerBtn.addEventListener("click", () => addRunnerRow());
-addRecordBtn.addEventListener("click", () => addRecordRow());
+addRunnerBtn.addEventListener("click", () => {
+  addRunnerRow();
+  onInputChanged();
+});
+addRecordBtn.addEventListener("click", () => {
+  addRecordRow();
+  onInputChanged();
+});
 
 runnerRows.addEventListener("click", (e) => {
   if (e.target.classList.contains("remove-runner")) {
     e.target.closest(".runner-row").remove();
     refreshRunnerButtons();
-    markStale();
+    onInputChanged();
   }
 });
 recordRows.addEventListener("click", (e) => {
   if (e.target.classList.contains("remove-record")) {
     e.target.closest(".record-row").remove();
     refreshRecordCount();
-    markStale();
+    onInputChanged();
   }
 });
 
-/* ---------- 输入修改后统一标记过期 ---------- */
+/* ---------- 输入修改后自动重算 ---------- */
 
-function markStale() {
-  if (resultsBox.dataset.fresh === "1") staleHint.hidden = false;
+// 每次修改递增版本号：只有版本仍最新的响应才允许更新结果或错误，
+// 过期的成功与失败一律丢弃，不得覆盖较新状态。
+let inputVersion = 0;
+let debounceTimer = null;
+const DEBOUNCE_MS = 350; // 合并连续编辑为一次重算
+
+function clearOutcome() {
+  // 每次修改立即清掉旧结果与旧错误。
+  resultsBox.innerHTML = "";
+  errorBox.hidden = true;
 }
-form.addEventListener("input", markStale);
-form.addEventListener("change", markStale);
+
+function onInputChanged() {
+  inputVersion += 1;
+  clearOutcome();
+  pendingHint.hidden = false;
+  if (debounceTimer) clearTimeout(debounceTimer);
+  debounceTimer = setTimeout(() => {
+    debounceTimer = null;
+    runAdjudication();
+  }, DEBOUNCE_MS);
+}
+
+form.addEventListener("input", onInputChanged);
+form.addEventListener("change", onInputChanged);
 
 /* ---------- 收集与提交 ---------- */
 
@@ -124,34 +149,45 @@ function collectPayload() {
   };
 }
 
-form.addEventListener("submit", async (e) => {
-  e.preventDefault();
-  errorBox.hidden = true;
-  staleHint.hidden = true;
-  submitBtn.disabled = true;
+async function runAdjudication() {
+  const version = inputVersion;
+  let resp;
+  let data;
   try {
-    const resp = await fetch("/api/adjudicate", {
+    resp = await fetch("/api/adjudicate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(collectPayload()),
     });
-    const data = await resp.json();
-    if (!resp.ok || !data.ok) {
-      // 非法输入：清空结果区，只显示错误（不展示部分结果）。
-      resultsBox.innerHTML = "";
-      resultsBox.dataset.fresh = "";
-      showError(data.error || "裁决失败");
-    } else {
-      renderResults(data.result);
-      resultsBox.dataset.fresh = "1";
-    }
+    data = await resp.json();
   } catch (err) {
+    if (version !== inputVersion) return; // 过期的失败不得覆盖较新状态
+    pendingHint.hidden = true;
     resultsBox.innerHTML = "";
-    resultsBox.dataset.fresh = "";
     showError(`无法连接裁决服务：${err.message}`);
-  } finally {
-    submitBtn.disabled = false;
+    return;
   }
+  if (version !== inputVersion) return; // 过期的成功同样丢弃
+  pendingHint.hidden = true;
+  if (!resp.ok || !data.ok) {
+    // 非法输入：清空结果区，只显示错误（不展示部分结果）。
+    resultsBox.innerHTML = "";
+    showError(data.error || "裁决失败");
+  } else {
+    errorBox.hidden = true;
+    renderResults(data.result);
+  }
+}
+
+// 手动裁决按钮仍然可用：跳过防抖立即重算，等待期间不锁定任何输入。
+form.addEventListener("submit", (e) => {
+  e.preventDefault();
+  if (debounceTimer) {
+    clearTimeout(debounceTimer);
+    debounceTimer = null;
+  }
+  pendingHint.hidden = false;
+  runAdjudication();
 });
 
 function showError(msg) {
@@ -291,11 +327,16 @@ function loadSample() {
   });
   refreshRecordCount();
 
-  errorBox.hidden = true;
-  staleHint.hidden = false;
+  onInputChanged(); // 载入示例后按当前完整输入自动重算
 }
 
 function clearAll() {
+  // 递增版本号并取消待发的重算：之后在途请求返回也不得恢复结果或错误。
+  inputVersion += 1;
+  if (debounceTimer) {
+    clearTimeout(debounceTimer);
+    debounceTimer = null;
+  }
   document.getElementById("smMin").value = "";
   document.getElementById("smMax").value = "";
   document.getElementById("mfMin").value = "";
@@ -304,10 +345,8 @@ function clearAll() {
   addRunnerRow();
   recordRows.innerHTML = "";
   addRecordRow();
-  errorBox.hidden = true;
-  staleHint.hidden = true;
-  resultsBox.innerHTML = "";
-  resultsBox.dataset.fresh = "";
+  clearOutcome(); // 同时清掉结果与错误
+  pendingHint.hidden = true;
 }
 
 document.getElementById("sample-btn").addEventListener("click", loadSample);

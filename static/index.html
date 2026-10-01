@@ -70,10 +70,11 @@
         <button type="button" class="btn ghost" id="sample-btn">填入示例</button>
         <button type="button" class="btn ghost" id="clear-btn">清空</button>
       </div>
+      <p class="hint">修改任意输入（含增删行、填入示例）后会自动重算，无需点击按钮；上方按钮可随时手动重算。</p>
     </form>
 
     <div id="error-box" class="error-box" hidden></div>
-    <div id="stale-hint" class="stale-hint" hidden>输入已修改，上方结果可能已过期，请点击“裁决 / 重新计算”。</div>
+    <div id="pending-hint" class="pending-hint" hidden>正在根据当前输入自动重新计算…</div>
     <div id="results"></div>
   </main>
 
